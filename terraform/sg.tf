@@ -46,6 +46,20 @@ resource "aws_security_group" "rds_sg" {
   vpc_id      = aws_vpc.ecs_project_vpc.id
 }
 
+resource "aws_security_group" "redis_sg" {
+  name        = "redis_sg"
+  description = "Allow traffic from ECS task SG to Redis"
+  vpc_id      = aws_vpc.ecs_project_vpc.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "allow_ecs_to_redis" {
+  security_group_id            = aws_security_group.redis_sg.id
+  referenced_security_group_id = aws_security_group.ecs_sg.id
+  from_port                    = 6379
+  ip_protocol                  = "tcp"
+  to_port                      = 6379
+}
+
 resource "aws_vpc_security_group_ingress_rule" "allow_ecs_to_rds" {
   security_group_id            = aws_security_group.rds_sg.id
   referenced_security_group_id = aws_security_group.ecs_sg.id
@@ -132,4 +146,12 @@ resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_rds" {
   from_port                    = 5432
   ip_protocol                  = "tcp"
   to_port                      = 5432
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_redis" {
+  security_group_id            = aws_security_group.ecs_sg.id
+  referenced_security_group_id = aws_security_group.redis_sg.id
+  from_port                    = 6379
+  ip_protocol                  = "tcp"
+  to_port                      = 6379
 }
