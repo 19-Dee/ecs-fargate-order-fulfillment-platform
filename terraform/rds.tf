@@ -11,7 +11,9 @@ resource "aws_db_subnet_group" "rds_subnet_group" {
 }
 
 resource "aws_db_instance" "orders_db" {
-  allocated_storage       = 20
+  allocated_storage = 20
+  storage_type      = "gp3"
+
   db_name                 = "orders_db"
   engine                  = "postgres"
   engine_version          = "16"
