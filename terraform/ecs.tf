@@ -472,6 +472,12 @@ resource "aws_ecs_service" "api_gateway" {
   task_definition = aws_ecs_task_definition.api_gateway.arn
   desired_count   = var.ecs_desired_count
 
+  load_balancer {
+    target_group_arn = aws_lb_target_group.ecs_project_alb.arn
+    container_name   = "api-gateway"
+    container_port   = 8080
+  }
+
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
     base              = 1
@@ -729,6 +735,12 @@ resource "aws_ecs_service" "dashboard_api" {
     capacity_provider = "FARGATE"
     base              = 1
     weight            = 100
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.dashboard_api.arn
+    container_name   = "dashboard-api"
+    container_port   = 8086
   }
 
   deployment_circuit_breaker {
