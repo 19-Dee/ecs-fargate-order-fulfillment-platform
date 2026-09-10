@@ -458,3 +458,255 @@ resource "aws_ecs_task_definition" "scheduler" {
     aws_secretsmanager_secret_version.database_url
   ]
 }
+
+resource "aws_ecs_service" "api_gateway" {
+  name            = "api-gateway"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.api_gateway.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "order_service" {
+  name            = "order-service"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.order_service.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "inventory_service" {
+  name            = "inventory-service"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.inventory_service.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "payment_service" {
+  name            = "payment-service"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.payment_service.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "notification_service" {
+  name            = "notification-service"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.notification_service.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "shipping_service" {
+  name            = "shipping-service"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.shipping_service.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "dashboard_api" {
+  name            = "dashboard-api"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.dashboard_api.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "worker" {
+  name            = "worker"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.worker.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
+
+resource "aws_ecs_service" "scheduler" {
+  name            = "scheduler"
+  cluster         = aws_ecs_cluster.ecs_project_cluster.id
+  task_definition = aws_ecs_task_definition.scheduler.arn
+  desired_count   = var.ecs_desired_count
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    base              = 1
+    weight            = 100
+  }
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_sg.id]
+    subnets          = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_ecs_cluster_capacity_providers.ecs_project_fargate
+  ]
+}
