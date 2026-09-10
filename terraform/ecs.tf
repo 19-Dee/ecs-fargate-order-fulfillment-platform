@@ -527,7 +527,7 @@ resource "aws_ecs_service" "order_service" {
       discovery_name = "order-service"
 
       client_alias {
-        dns_name = "order-servce"
+        dns_name = "order-service"
         port     = 8081
       }
     }
