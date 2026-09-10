@@ -155,3 +155,51 @@ resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_redis" {
   ip_protocol                  = "tcp"
   to_port                      = 6379
 }
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_ecr_api" {
+  security_group_id            = aws_security_group.ecs_sg.id
+  referenced_security_group_id = aws_security_group.ecr_api_ep_sg.id
+  from_port                    = 443
+  ip_protocol                  = "tcp"
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_ecr_dkr" {
+  security_group_id            = aws_security_group.ecs_sg.id
+  referenced_security_group_id = aws_security_group.ecr_dkr_ep_sg.id
+  from_port                    = 443
+  ip_protocol                  = "tcp"
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_sqs" {
+  security_group_id            = aws_security_group.ecs_sg.id
+  referenced_security_group_id = aws_security_group.sqs_sg.id
+  from_port                    = 443
+  ip_protocol                  = "tcp"
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_cloudwatch_logs" {
+  security_group_id            = aws_security_group.ecs_sg.id
+  referenced_security_group_id = aws_security_group.cloudwatch_logs_ep_sg.id
+  from_port                    = 443
+  ip_protocol                  = "tcp"
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_secrets_manager" {
+  security_group_id            = aws_security_group.ecs_sg.id
+  referenced_security_group_id = aws_security_group.secrets_manager_sg.id
+  from_port                    = 443
+  ip_protocol                  = "tcp"
+  to_port                      = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "allow_ecs_to_s3_ep" {
+  security_group_id = aws_security_group.ecs_sg.id
+  prefix_list_id    = aws_vpc_endpoint.s3_gateway_ep.prefix_list_id
+  from_port         = 443
+  ip_protocol       = "tcp"
+  to_port           = 443
+}
