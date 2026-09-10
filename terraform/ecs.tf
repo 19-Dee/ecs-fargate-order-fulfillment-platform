@@ -399,6 +399,13 @@ resource "aws_ecs_task_definition" "worker" {
         }
       ]
 
+      environment = [
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.ecs_v3_queue.id
+        }
+      ]
+
       logConfiguration = {
         logDriver = "awslogs"
 
