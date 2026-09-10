@@ -492,6 +492,12 @@ resource "aws_ecs_service" "api_gateway" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+  }
 }
 
 resource "aws_ecs_service" "order_service" {
@@ -504,6 +510,21 @@ resource "aws_ecs_service" "order_service" {
     capacity_provider = "FARGATE"
     base              = 1
     weight            = 100
+  }
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+
+    service {
+      port_name      = "order-service"
+      discovery_name = "order-service"
+
+      client_alias {
+        dns_name = "order-servce"
+        port     = 8081
+      }
+    }
   }
 
   deployment_circuit_breaker {
@@ -548,6 +569,22 @@ resource "aws_ecs_service" "inventory_service" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+
+    service {
+      port_name      = "inventory-service"
+      discovery_name = "inventory-service"
+
+      client_alias {
+        dns_name = "inventory-service"
+        port     = 8082
+      }
+    }
+  }
 }
 
 resource "aws_ecs_service" "payment_service" {
@@ -576,6 +613,22 @@ resource "aws_ecs_service" "payment_service" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+
+    service {
+      port_name      = "payment-service"
+      discovery_name = "payment-service"
+
+      client_alias {
+        dns_name = "payment-service"
+        port     = 8083
+      }
+    }
+  }
 }
 
 resource "aws_ecs_service" "notification_service" {
@@ -604,6 +657,22 @@ resource "aws_ecs_service" "notification_service" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+
+    service {
+      port_name      = "notification-service"
+      discovery_name = "notification-service"
+
+      client_alias {
+        dns_name = "notification-service"
+        port     = 8084
+      }
+    }
+  }
 }
 
 resource "aws_ecs_service" "shipping_service" {
@@ -632,6 +701,22 @@ resource "aws_ecs_service" "shipping_service" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+
+    service {
+      port_name      = "shipping-service"
+      discovery_name = "shipping-service"
+
+      client_alias {
+        dns_name = "shipping-service"
+        port     = 8085
+      }
+    }
+  }
 }
 
 resource "aws_ecs_service" "dashboard_api" {
@@ -660,6 +745,22 @@ resource "aws_ecs_service" "dashboard_api" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
+
+    service {
+      port_name      = "dashboard-api"
+      discovery_name = "dashboard-api"
+
+      client_alias {
+        dns_name = "dashboard-api"
+        port     = 8086
+      }
+    }
+  }
 }
 
 resource "aws_ecs_service" "worker" {
@@ -716,4 +817,8 @@ resource "aws_ecs_service" "scheduler" {
   depends_on = [
     aws_ecs_cluster_capacity_providers.ecs_project_fargate
   ]
+}
+
+resource "aws_service_discovery_http_namespace" "ecs_services" {
+  name = "ecs-services"
 }
