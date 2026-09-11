@@ -387,7 +387,7 @@ resource "aws_ecs_task_definition" "worker" {
   container_definitions = jsonencode([
     {
       name      = "worker"
-      image     = "${aws_ecr_repository.worker.repository_url}:initial"
+      image     = "${aws_ecr_repository.worker.repository_url}:sqs-polling-v1"
       cpu       = 256
       memory    = 512
       essential = true
