@@ -215,6 +215,24 @@ resource "aws_iam_role_policy" "github_actions_deploy_policy" {
         ]
 
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "iam:PassRole"
+        ]
+
+        Resource = [
+          aws_iam_role.ecs_task_execution_role.arn,
+          aws_iam_role.worker_task_role.arn
+        ]
+
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       }
     ]
   })
