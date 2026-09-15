@@ -243,6 +243,23 @@ func handleReserve(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	for _, item := range req.Items {
+		var existingQuantity int
+		err = tx.QueryRow(
+			"SELECT quantity FROM reservations WHERE order_id = $1 AND product_id = $2 AND status = 'active' LIMIT 1",
+			req.OrderID, item.ProductID,
+		).Scan(&existingQuantity)
+		if err == nil {
+			if existingQuantity != item.Quantity {
+				httpError(w, fmt.Sprintf("order %d already reserved a different quantity for %s", req.OrderID, item.ProductID), http.StatusConflict)
+				return
+			}
+			continue
+		}
+		if err != sql.ErrNoRows {
+			httpError(w, "reservation lookup failed", http.StatusInternalServerError)
+			return
+		}
+
 		// Check available stock with row lock
 		var stock, reserved int
 		err := tx.QueryRow(

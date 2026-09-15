@@ -14,10 +14,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
+var eventQueueURL string
+var eventQueue *sqs.Client
 
 func main() {
 	dbURL := os.Getenv("DATABASE_URL")
@@ -37,6 +41,7 @@ func main() {
 	db.SetConnMaxLifetime(5 * time.Minute)
 	waitForDB()
 	migrate()
+	initEventPublisher()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -201,6 +206,33 @@ func createShipment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var existingID int
+	var existingTracking, existingCarrier string
+	var existingDelivery sql.NullString
+	err := db.QueryRow(
+		"SELECT id, tracking_number, carrier, estimated_delivery FROM shipments WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+		req.OrderID,
+	).Scan(&existingID, &existingTracking, &existingCarrier, &existingDelivery)
+	if err == nil {
+		if err := publishEvent("shipment.created", map[string]interface{}{
+			"shipment_id": existingID, "order_id": req.OrderID,
+			"tracking_number": existingTracking, "carrier": existingCarrier,
+		}); err != nil {
+			httpError(w, "shipment recorded but event could not be queued", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"shipment_id": existingID, "tracking_number": existingTracking,
+			"carrier": existingCarrier, "estimated_delivery": existingDelivery.String, "idempotent": true,
+		})
+		return
+	}
+	if err != sql.ErrNoRows {
+		httpError(w, "shipment lookup failed", http.StatusInternalServerError)
+		return
+	}
+
 	carrier := req.Carrier
 	if carrier == "" {
 		carrier = "royal_mail"
@@ -214,7 +246,7 @@ func createShipment(w http.ResponseWriter, r *http.Request) {
 	estimatedDelivery := time.Now().AddDate(0, 0, 3+rand.Intn(5))
 
 	var shipmentID int
-	err := db.QueryRow(
+	err = db.QueryRow(
 		`INSERT INTO shipments (order_id, carrier, tracking_number, recipient_name,
 		 address_line1, address_line2, city, postcode, country, weight_kg, estimated_delivery)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
@@ -235,12 +267,15 @@ func createShipment(w http.ResponseWriter, r *http.Request) {
 		shipmentID, req.City,
 	)
 
-	publishEvent("shipment.created", map[string]interface{}{
+	if err := publishEvent("shipment.created", map[string]interface{}{
 		"shipment_id":     shipmentID,
 		"order_id":        req.OrderID,
 		"tracking_number": trackingNumber,
 		"carrier":         carrier,
-	})
+	}); err != nil {
+		httpError(w, "shipment recorded but event could not be queued", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -359,12 +394,25 @@ func handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var shipmentID, orderID int
+	var currentStatus string
 	err := db.QueryRow(
-		"SELECT id, order_id FROM shipments WHERE tracking_number = $1",
+		"SELECT id, order_id, status FROM shipments WHERE tracking_number = $1",
 		req.TrackingNumber,
-	).Scan(&shipmentID, &orderID)
+	).Scan(&shipmentID, &orderID, &currentStatus)
 	if err != nil {
 		httpError(w, "tracking number not found", http.StatusNotFound)
+		return
+	}
+	if currentStatus == req.Status {
+		if err := publishEvent("shipment."+req.Status, map[string]interface{}{
+			"shipment_id": shipmentID, "order_id": orderID,
+			"tracking_number": req.TrackingNumber, "status": req.Status, "location": req.Location,
+		}); err != nil {
+			httpError(w, "shipment updated but event could not be queued", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "accepted", "idempotent": true})
 		return
 	}
 
@@ -384,13 +432,16 @@ func handleCarrierWebhook(w http.ResponseWriter, r *http.Request) {
 		shipmentID, req.Status, req.Location, req.Description,
 	)
 
-	publishEvent("shipment."+req.Status, map[string]interface{}{
+	if err := publishEvent("shipment."+req.Status, map[string]interface{}{
 		"shipment_id":     shipmentID,
 		"order_id":        orderID,
 		"tracking_number": req.TrackingNumber,
 		"status":          req.Status,
 		"location":        req.Location,
-	})
+	}); err != nil {
+		httpError(w, "shipment updated but event could not be queued", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
@@ -409,19 +460,40 @@ func generateTrackingNumber(carrier string) string {
 	return fmt.Sprintf("%s%d%d", prefix, time.Now().UnixNano(), rand.Intn(100000))
 }
 
-func publishEvent(eventType string, payload map[string]interface{}) {
-	sqsQueue := os.Getenv("SQS_QUEUE_URL")
-	if sqsQueue == "" {
-		log.Printf("Event (no SQS): %s %v", eventType, payload)
+func initEventPublisher() {
+	eventQueueURL = os.Getenv("SQS_QUEUE_URL")
+	if eventQueueURL == "" {
 		return
+	}
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatalf("Load AWS configuration for event publisher: %v", err)
+	}
+	eventQueue = sqs.NewFromConfig(cfg)
+}
+
+func publishEvent(eventType string, payload map[string]interface{}) error {
+	if eventQueue == nil {
+		log.Printf("Event (no SQS): %s %v", eventType, payload)
+		return nil
 	}
 	event := map[string]interface{}{
 		"type":      eventType,
 		"payload":   payload,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
-	data, _ := json.Marshal(event)
-	log.Printf("Event -> SQS: %s", string(data))
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	body := string(data)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := eventQueue.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: &eventQueueURL, MessageBody: &body}); err != nil {
+		return err
+	}
+	log.Printf("Event -> SQS: %s", body)
+	return nil
 }
 
 func httpError(w http.ResponseWriter, msg string, code int) {

@@ -14,10 +14,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
+var eventQueueURL string
+var eventQueue *sqs.Client
 
 func main() {
 	dbURL := os.Getenv("DATABASE_URL")
@@ -37,6 +41,7 @@ func main() {
 	db.SetConnMaxLifetime(5 * time.Minute)
 	waitForDB()
 	migrate()
+	initEventPublisher()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -143,6 +148,39 @@ func handleCharge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var existingID, existingCurrency, existingStatus string
+	var existingAmount float64
+	err := db.QueryRow(
+		`SELECT id, amount, currency, status FROM payments
+		 WHERE order_id = $1 AND (method IS NULL OR method != 'refund')
+		 ORDER BY created_at DESC LIMIT 1`,
+		req.OrderID,
+	).Scan(&existingID, &existingAmount, &existingCurrency, &existingStatus)
+	if err == nil {
+		if err := publishEvent("payment."+existingStatus, map[string]interface{}{
+			"payment_id": existingID, "order_id": req.OrderID, "customer_id": req.CustomerID,
+			"amount": existingAmount, "currency": existingCurrency, "status": existingStatus,
+		}); err != nil {
+			httpError(w, "payment recorded but event could not be queued", http.StatusServiceUnavailable)
+			return
+		}
+		code := http.StatusOK
+		if existingStatus == "failed" {
+			code = http.StatusPaymentRequired
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"payment_id": existingID, "order_id": req.OrderID, "amount": existingAmount,
+			"currency": existingCurrency, "status": existingStatus, "idempotent": true,
+		})
+		return
+	}
+	if err != sql.ErrNoRows {
+		httpError(w, "payment lookup failed", http.StatusInternalServerError)
+		return
+	}
+
 	paymentID := generatePaymentID()
 	currency := req.Currency
 	if currency == "" {
@@ -189,14 +227,18 @@ func handleCharge(w http.ResponseWriter, r *http.Request) {
 	tx.Commit()
 
 	// Publish event
-	publishEvent("payment."+status, map[string]interface{}{
+	if err := publishEvent("payment."+status, map[string]interface{}{
 		"payment_id":  paymentID,
 		"order_id":    req.OrderID,
 		"customer_id": req.CustomerID,
 		"amount":      req.Amount,
 		"currency":    currency,
 		"status":      status,
-	})
+	}); err != nil {
+		log.Printf("Publish payment.%s for order %d: %v", status, req.OrderID, err)
+		httpError(w, "payment recorded but event could not be queued", http.StatusServiceUnavailable)
+		return
+	}
 
 	code := http.StatusCreated
 	if status == "failed" {
@@ -222,6 +264,7 @@ func handleRefund(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		PaymentID string  `json:"payment_id"`
+		OrderID   int     `json:"order_id"`
 		Amount    float64 `json:"amount"`
 		Reason    string  `json:"reason"`
 	}
@@ -234,17 +277,38 @@ func handleRefund(w http.ResponseWriter, r *http.Request) {
 	var originalAmount float64
 	var orderID int
 	var paymentStatus, customerID, currency string
-	err := db.QueryRow(
-		"SELECT amount, order_id, status, customer_id, currency FROM payments WHERE id = $1",
-		req.PaymentID,
-	).Scan(&originalAmount, &orderID, &paymentStatus, &customerID, &currency)
+	var err error
+	if req.PaymentID != "" {
+		err = db.QueryRow(
+			"SELECT amount, order_id, status, customer_id, currency FROM payments WHERE id = $1",
+			req.PaymentID,
+		).Scan(&originalAmount, &orderID, &paymentStatus, &customerID, &currency)
+	} else {
+		err = db.QueryRow(
+			`SELECT amount, order_id, status, customer_id, currency, id FROM payments
+			 WHERE order_id = $1 AND (method IS NULL OR method != 'refund')
+			 ORDER BY created_at DESC LIMIT 1`,
+			req.OrderID,
+		).Scan(&originalAmount, &orderID, &paymentStatus, &customerID, &currency, &req.PaymentID)
+	}
+	if err == sql.ErrNoRows {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"order_id": req.OrderID, "status": "no_payment_to_refund", "idempotent": true})
+		return
+	}
 	if err != nil {
-		httpError(w, "payment not found", http.StatusNotFound)
+		httpError(w, "payment lookup failed", http.StatusInternalServerError)
 		return
 	}
 
+	if paymentStatus == "refunded" || paymentStatus == "partially_refunded" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"payment_id": req.PaymentID, "order_id": orderID, "status": paymentStatus, "idempotent": true})
+		return
+	}
 	if paymentStatus != "completed" {
-		httpError(w, "can only refund completed payments", http.StatusConflict)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"payment_id": req.PaymentID, "order_id": orderID, "status": "no_payment_to_refund", "idempotent": true})
 		return
 	}
 
@@ -290,13 +354,16 @@ func handleRefund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	publishEvent("payment.refunded", map[string]interface{}{
+	if err := publishEvent("payment.refunded", map[string]interface{}{
 		"refund_id":  refundID,
 		"payment_id": req.PaymentID,
 		"order_id":   orderID,
 		"amount":     refundAmount,
 		"reason":     req.Reason,
-	})
+	}); err != nil {
+		httpError(w, "refund recorded but event could not be queued", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -371,19 +438,40 @@ func generatePaymentID() string {
 	return fmt.Sprintf("pay_%d_%d", time.Now().UnixNano(), rand.Intn(10000))
 }
 
-func publishEvent(eventType string, payload map[string]interface{}) {
-	sqsQueue := os.Getenv("SQS_QUEUE_URL")
-	if sqsQueue == "" {
-		log.Printf("Event (no SQS): %s %v", eventType, payload)
+func initEventPublisher() {
+	eventQueueURL = os.Getenv("SQS_QUEUE_URL")
+	if eventQueueURL == "" {
 		return
+	}
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatalf("Load AWS configuration for event publisher: %v", err)
+	}
+	eventQueue = sqs.NewFromConfig(cfg)
+}
+
+func publishEvent(eventType string, payload map[string]interface{}) error {
+	if eventQueue == nil {
+		log.Printf("Event (no SQS): %s %v", eventType, payload)
+		return nil
 	}
 	event := map[string]interface{}{
 		"type":      eventType,
 		"payload":   payload,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
-	data, _ := json.Marshal(event)
-	log.Printf("Event -> SQS: %s", string(data))
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	body := string(data)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := eventQueue.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: &eventQueueURL, MessageBody: &body}); err != nil {
+		return err
+	}
+	log.Printf("Event -> SQS: %s", body)
+	return nil
 }
 
 func httpError(w http.ResponseWriter, msg string, code int) {

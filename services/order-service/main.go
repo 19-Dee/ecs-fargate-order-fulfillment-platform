@@ -13,10 +13,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	_ "github.com/lib/pq"
 )
 
 var db *sql.DB
+var eventQueueURL string
+var eventQueue *sqs.Client
 
 type Order struct {
 	ID         int             `json:"id"`
@@ -71,6 +75,7 @@ func main() {
 
 	waitForDB()
 	migrate()
+	initEventPublisher()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -220,13 +225,17 @@ func createOrder(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Publish to SQS for downstream services (inventory reservation, etc.)
-	publishEvent("order.created", map[string]interface{}{
+	if err := publishEvent("order.created", map[string]interface{}{
 		"order_id":    orderID,
 		"customer_id": customerID,
 		"items":       req.Items,
 		"total":       total,
 		"currency":    currency,
-	})
+	}); err != nil {
+		log.Printf("Publish order.created for order %d: %v", orderID, err)
+		httpError(w, "order created but processing could not be queued", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -320,6 +329,24 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 		httpError(w, "order not found", http.StatusNotFound)
 		return
 	}
+	if currentStatus == req.NewStatus {
+		if err := publishEvent("order.status_changed", map[string]interface{}{
+			"order_id":   req.OrderID,
+			"old_status": currentStatus,
+			"new_status": req.NewStatus,
+		}); err != nil {
+			httpError(w, "status saved but event could not be queued", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"order_id":   req.OrderID,
+			"old_status": currentStatus,
+			"new_status": req.NewStatus,
+			"idempotent": true,
+		})
+		return
+	}
 
 	// Validate transition
 	allowed, ok := validTransitions[currentStatus]
@@ -357,11 +384,15 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Publish event
-	publishEvent("order.status_changed", map[string]interface{}{
+	if err := publishEvent("order.status_changed", map[string]interface{}{
 		"order_id":   req.OrderID,
 		"old_status": currentStatus,
 		"new_status": req.NewStatus,
-	})
+	}); err != nil {
+		log.Printf("Publish order.status_changed for order %d: %v", req.OrderID, err)
+		httpError(w, "status saved but event could not be queued", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -371,11 +402,22 @@ func handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func publishEvent(eventType string, payload map[string]interface{}) {
-	sqsQueue := os.Getenv("SQS_QUEUE_URL")
-	if sqsQueue == "" {
-		log.Printf("Event (no SQS): %s %v", eventType, payload)
+func initEventPublisher() {
+	eventQueueURL = os.Getenv("SQS_QUEUE_URL")
+	if eventQueueURL == "" {
 		return
+	}
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		log.Fatalf("Load AWS configuration for event publisher: %v", err)
+	}
+	eventQueue = sqs.NewFromConfig(cfg)
+}
+
+func publishEvent(eventType string, payload map[string]interface{}) error {
+	if eventQueue == nil {
+		log.Printf("Event (no SQS): %s %v", eventType, payload)
+		return nil
 	}
 
 	event := map[string]interface{}{
@@ -383,9 +425,18 @@ func publishEvent(eventType string, payload map[string]interface{}) {
 		"payload":   payload,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	}
-	data, _ := json.Marshal(event)
-	log.Printf("Event -> SQS: %s", string(data))
-	// Students implement actual SQS SendMessage here
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	body := string(data)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := eventQueue.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: &eventQueueURL, MessageBody: &body}); err != nil {
+		return err
+	}
+	log.Printf("Event -> SQS: %s", body)
+	return nil
 }
 
 func httpError(w http.ResponseWriter, msg string, code int) {

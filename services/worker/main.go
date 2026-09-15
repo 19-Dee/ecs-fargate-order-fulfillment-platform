@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -134,80 +137,284 @@ func pollAndProcess(ctx context.Context, sqsClient *sqs.Client, queueURL string,
 
 func handleEvent(client *http.Client, services map[string]string, event Event) error {
 	switch event.Type {
-
 	case "order.created":
-		// 1. Reserve inventory
-		log.Printf("  -> Reserving inventory for order")
-		// POST to inventory-service/reserve with order items
-		// If reservation fails, update order status to "cancelled"
+		orderID, err := payloadInt(event.Payload, "order_id")
+		if err != nil {
+			return err
+		}
+		order, err := getOrder(client, services["order"], orderID)
+		if err != nil {
+			return err
+		}
+		if payloadString(order, "status") != "pending" {
+			log.Printf("  -> Order %d already progressed to %s; skipping duplicate order.created", orderID, payloadString(order, "status"))
+			return nil
+		}
+		items, ok := event.Payload["items"]
+		if !ok {
+			return fmt.Errorf("order.created missing items")
+		}
+		log.Printf("  -> Reserving inventory for order %d", orderID)
+		if _, _, err := requestJSON(client, http.MethodPost, services["inventory"]+"/reserve", map[string]interface{}{
+			"order_id": orderID,
+			"items":    items,
+		}); err != nil {
+			return fmt.Errorf("reserve inventory: %w", err)
+		}
 
-		// 2. Process payment
-		log.Printf("  -> Processing payment")
-		// POST to payment-service/charge
-		// If payment fails, release inventory reservation
-
-		// 3. Send confirmation notification
-		log.Printf("  -> Sending order confirmation")
-		// POST to notification-service/send with order_confirmed template
-
-		// 4. Update order to confirmed
-		log.Printf("  -> Confirming order")
-		// PUT to order-service/status with new_status: "confirmed"
+		log.Printf("  -> Charging payment for order %d", orderID)
+		status, _, err := requestJSON(client, http.MethodPost, services["payment"]+"/charge", map[string]interface{}{
+			"order_id":    orderID,
+			"customer_id": payloadString(event.Payload, "customer_id"),
+			"amount":      payloadFloat(event.Payload, "total"),
+			"currency":    payloadString(event.Payload, "currency"),
+			"method":      "demo",
+		})
+		if err != nil && status != http.StatusPaymentRequired {
+			return fmt.Errorf("charge payment: %w", err)
+		}
+		// Both completed and failed charges publish their own event. A 402 is a
+		// handled business outcome, not an infrastructure failure.
+		return nil
 
 	case "order.status_changed":
 		newStatus, _ := event.Payload["new_status"].(string)
+		orderID, err := payloadInt(event.Payload, "order_id")
+		if err != nil {
+			return err
+		}
 
 		switch newStatus {
 		case "processing":
-			// Create shipment
-			log.Printf("  -> Creating shipment for order")
-			// POST to shipping-service/shipments
-
-		case "shipped":
-			// Notify customer
-			log.Printf("  -> Sending shipping notification")
-			// POST to notification-service/send with order_shipped template
-
-		case "delivered":
-			log.Printf("  -> Sending delivery notification")
-			// POST to notification-service/send with order_delivered template
+			order, err := getOrder(client, services["order"], orderID)
+			if err != nil {
+				return err
+			}
+			log.Printf("  -> Creating shipment for order %d", orderID)
+			_, _, err = requestJSON(client, http.MethodPost, services["shipping"]+"/shipments", map[string]interface{}{
+				"order_id":       orderID,
+				"recipient_name": payloadString(order, "customer_id"),
+				"address_line1":  "Demo fulfilment address",
+				"city":           "London",
+				"country":        "GB",
+				"weight_kg":      1,
+			})
+			return err
 
 		case "cancelled":
-			// Release inventory
-			log.Printf("  -> Releasing inventory reservation")
-			// POST to inventory-service/release
-
-			// Process refund if payment was made
-			log.Printf("  -> Processing refund")
-			// POST to payment-service/refund
+			order, err := getOrder(client, services["order"], orderID)
+			if err != nil {
+				return err
+			}
+			log.Printf("  -> Releasing inventory for cancelled order %d", orderID)
+			if _, _, err := requestJSON(client, http.MethodPost, services["inventory"]+"/release", map[string]interface{}{"order_id": orderID}); err != nil {
+				return err
+			}
+			log.Printf("  -> Refunding completed payment for cancelled order %d when present", orderID)
+			if _, _, err := requestJSON(client, http.MethodPost, services["payment"]+"/refund", map[string]interface{}{
+				"order_id": orderID,
+				"reason":   "order cancelled",
+			}); err != nil {
+				return err
+			}
+			return sendNotification(client, services["notification"], order, "payment_failed", orderID, map[string]interface{}{})
 		}
 
 	case "payment.completed":
-		log.Printf("  -> Payment successful, confirming order")
-		// Update order status to confirmed
+		orderID, err := payloadInt(event.Payload, "order_id")
+		if err != nil {
+			return err
+		}
+		log.Printf("  -> Payment successful, confirming order %d", orderID)
+		if err := ensureOrderStatus(client, services["order"], orderID, "confirmed"); err != nil {
+			return err
+		}
+		order, err := getOrder(client, services["order"], orderID)
+		if err != nil {
+			return err
+		}
+		if err := sendNotification(client, services["notification"], order, "order_confirmed", orderID, map[string]interface{}{
+			"Total":    order["total"],
+			"Currency": order["currency"],
+		}); err != nil {
+			return err
+		}
+		return ensureOrderStatus(client, services["order"], orderID, "processing")
 
 	case "payment.failed":
-		log.Printf("  -> Payment failed, cancelling order")
-		// Release inventory reservation
-		// Update order status to cancelled
-		// Send payment failed notification
+		orderID, err := payloadInt(event.Payload, "order_id")
+		if err != nil {
+			return err
+		}
+		log.Printf("  -> Payment failed, cancelling order %d", orderID)
+		// The resulting order.status_changed event owns release/refund/notification.
+		return ensureOrderStatus(client, services["order"], orderID, "cancelled")
 
 	case "shipment.created":
-		log.Printf("  -> Shipment created, updating order to processing")
-		// Update order status
+		orderID, err := payloadInt(event.Payload, "order_id")
+		if err != nil {
+			return err
+		}
+		tracking := payloadString(event.Payload, "tracking_number")
+		log.Printf("  -> Shipment created, marking order %d shipped", orderID)
+		if err := ensureOrderStatus(client, services["order"], orderID, "shipped"); err != nil {
+			return err
+		}
+		order, err := getOrder(client, services["order"], orderID)
+		if err != nil {
+			return err
+		}
+		if err := sendNotification(client, services["notification"], order, "order_shipped", orderID, map[string]interface{}{"TrackingNumber": tracking}); err != nil {
+			return err
+		}
+		if getEnv("AUTO_DELIVER", "true") == "true" {
+			log.Printf("  -> Completing demo carrier delivery for order %d", orderID)
+			_, _, err = requestJSON(client, http.MethodPost, services["shipping"]+"/webhook", map[string]interface{}{
+				"tracking_number": tracking,
+				"status":          "delivered",
+				"location":        "London",
+				"description":     "Delivered by demo carrier",
+			})
+			return err
+		}
 
 	case "shipment.delivered":
-		log.Printf("  -> Shipment delivered, updating order")
-		// Update order status to delivered
-		// Send delivery notification
+		orderID, err := payloadInt(event.Payload, "order_id")
+		if err != nil {
+			return err
+		}
+		log.Printf("  -> Shipment delivered, completing order %d", orderID)
+		if err := ensureOrderStatus(client, services["order"], orderID, "delivered"); err != nil {
+			return err
+		}
+		order, err := getOrder(client, services["order"], orderID)
+		if err != nil {
+			return err
+		}
+		return sendNotification(client, services["notification"], order, "order_delivered", orderID, map[string]interface{}{})
 
 	default:
 		log.Printf("  -> Unknown event type: %s (skipping)", event.Type)
 	}
-
-	_ = client
-	_ = services
 	return nil
+}
+
+func requestJSON(client *http.Client, method, url string, payload interface{}) (int, map[string]interface{}, error) {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return 0, nil, err
+		}
+		body = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	result := map[string]interface{}{}
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &result)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, result, fmt.Errorf("%s %s returned %d: %s", method, url, resp.StatusCode, string(data))
+	}
+	return resp.StatusCode, result, nil
+}
+
+func getOrder(client *http.Client, orderService string, orderID int) (map[string]interface{}, error) {
+	_, order, err := requestJSON(client, http.MethodGet, fmt.Sprintf("%s/%d", orderService, orderID), nil)
+	if err != nil {
+		return nil, fmt.Errorf("get order %d: %w", orderID, err)
+	}
+	return order, nil
+}
+
+func ensureOrderStatus(client *http.Client, orderService string, orderID int, target string) error {
+	order, err := getOrder(client, orderService, orderID)
+	if err != nil {
+		return err
+	}
+	current := payloadString(order, "status")
+	if statusAtOrBeyond(current, target) && current != target {
+		return nil
+	}
+	_, _, err = requestJSON(client, http.MethodPut, orderService+"/status", map[string]interface{}{
+		"order_id":   orderID,
+		"new_status": target,
+	})
+	return err
+}
+
+func statusAtOrBeyond(current, target string) bool {
+	if current == "cancelled" {
+		return target == "cancelled"
+	}
+	rank := map[string]int{"pending": 0, "confirmed": 1, "processing": 2, "shipped": 3, "delivered": 4}
+	currentRank, currentOK := rank[current]
+	targetRank, targetOK := rank[target]
+	return currentOK && targetOK && currentRank >= targetRank
+}
+
+func sendNotification(client *http.Client, notificationService string, order map[string]interface{}, template string, orderID int, extra map[string]interface{}) error {
+	data := map[string]interface{}{
+		"OrderID":      orderID,
+		"CustomerName": payloadString(order, "customer_id"),
+	}
+	for key, value := range extra {
+		data[key] = value
+	}
+	_, _, err := requestJSON(client, http.MethodPost, notificationService+"/send", map[string]interface{}{
+		"recipient":       payloadString(order, "customer_id"),
+		"channel":         "email",
+		"template":        template,
+		"idempotency_key": fmt.Sprintf("order:%d:%s", orderID, template),
+		"data":            data,
+	})
+	return err
+}
+
+func payloadInt(payload map[string]interface{}, key string) (int, error) {
+	value, ok := payload[key]
+	if !ok {
+		return 0, fmt.Errorf("missing %s", key)
+	}
+	switch n := value.(type) {
+	case float64:
+		return int(n), nil
+	case int:
+		return n, nil
+	default:
+		return 0, fmt.Errorf("invalid %s", key)
+	}
+}
+
+func payloadFloat(payload map[string]interface{}, key string) float64 {
+	switch n := payload[key].(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+func payloadString(payload map[string]interface{}, key string) string {
+	value, _ := payload[key].(string)
+	return value
 }
 
 func receiveSQSMessages(ctx context.Context, sqsClient *sqs.Client, queueURL string) ([]types.Message, error) {

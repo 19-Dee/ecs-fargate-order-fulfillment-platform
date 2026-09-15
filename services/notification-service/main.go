@@ -86,6 +86,8 @@ func migrate() {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status)`,
+		`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_idempotency ON notifications(idempotency_key) WHERE idempotency_key IS NOT NULL`,
 		`CREATE TABLE IF NOT EXISTS notification_templates (
 			id VARCHAR(100) PRIMARY KEY,
 			channel VARCHAR(20) NOT NULL,
@@ -142,10 +144,11 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Recipient string                 `json:"recipient"`
-		Channel   string                 `json:"channel"`
-		Template  string                 `json:"template"`
-		Data      map[string]interface{} `json:"data"`
+		Recipient      string                 `json:"recipient"`
+		Channel        string                 `json:"channel"`
+		Template       string                 `json:"template"`
+		IdempotencyKey string                 `json:"idempotency_key"`
+		Data           map[string]interface{} `json:"data"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, "invalid request body", http.StatusBadRequest)
@@ -159,6 +162,30 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 
 	if req.Channel == "" {
 		req.Channel = "email"
+	}
+
+	if req.IdempotencyKey != "" {
+		var existingID int
+		var existingStatus string
+		err := db.QueryRow(
+			"SELECT id, status FROM notifications WHERE idempotency_key = $1",
+			req.IdempotencyKey,
+		).Scan(&existingID, &existingStatus)
+		if err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":         existingID,
+				"recipient":  req.Recipient,
+				"channel":    req.Channel,
+				"status":     existingStatus,
+				"idempotent": true,
+			})
+			return
+		}
+		if err != sql.ErrNoRows {
+			httpError(w, "notification lookup failed", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Look up template
@@ -181,11 +208,15 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	sentAt := time.Now()
 
 	var notifID int
-	db.QueryRow(
-		`INSERT INTO notifications (recipient, channel, template, subject, body, metadata, status, sent_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		req.Recipient, req.Channel, req.Template, subject, body, metadata, status, sentAt,
+	err = db.QueryRow(
+		`INSERT INTO notifications (recipient, channel, template, subject, body, metadata, status, sent_at, idempotency_key)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, '')) RETURNING id`,
+		req.Recipient, req.Channel, req.Template, subject, body, metadata, status, sentAt, req.IdempotencyKey,
 	).Scan(&notifID)
+	if err != nil {
+		httpError(w, "failed to record notification", http.StatusInternalServerError)
+		return
+	}
 
 	log.Printf("Notification sent: [%s] %s -> %s (template: %s)", req.Channel, req.Template, req.Recipient, req.Template)
 
