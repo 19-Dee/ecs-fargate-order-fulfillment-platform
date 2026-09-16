@@ -92,6 +92,64 @@ resource "aws_iam_role_policy" "order_service_sqs" {
   })
 }
 
+resource "aws_iam_role" "payment_service_task_role" {
+  name = "payment-service-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "payment_service_sqs" {
+  name = "payment-service-sqs-policy"
+  role = aws_iam_role.payment_service_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.ecs_v3_queue.arn
+    }]
+  })
+}
+
+resource "aws_iam_role" "shipping_service_task_role" {
+  name = "shipping-service-task-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "shipping_service_sqs" {
+  name = "shipping-service-sqs-policy"
+  role = aws_iam_role.shipping_service_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.ecs_v3_queue.arn
+    }]
+  })
+}
+
 resource "aws_iam_role" "worker_task_role" {
   name = "worker-task-role"
 

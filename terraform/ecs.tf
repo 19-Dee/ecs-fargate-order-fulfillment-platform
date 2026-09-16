@@ -118,6 +118,13 @@ resource "aws_ecs_task_definition" "order_service" {
         }
       ]
 
+      environment = [
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.ecs_v3_queue.id
+        }
+      ]
+
       logConfiguration = {
         logDriver = "awslogs"
 
@@ -189,6 +196,7 @@ resource "aws_ecs_task_definition" "payment_service" {
   network_mode             = "awsvpc"
   cpu                      = 256
   memory                   = 512
+  task_role_arn            = aws_iam_role.payment_service_task_role.arn
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
@@ -211,6 +219,13 @@ resource "aws_ecs_task_definition" "payment_service" {
         {
           name      = "DATABASE_URL"
           valueFrom = aws_secretsmanager_secret.database_url.arn
+        }
+      ]
+
+      environment = [
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.ecs_v3_queue.id
         }
       ]
 
@@ -285,6 +300,7 @@ resource "aws_ecs_task_definition" "shipping_service" {
   network_mode             = "awsvpc"
   cpu                      = 256
   memory                   = 512
+  task_role_arn            = aws_iam_role.shipping_service_task_role.arn
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
@@ -307,6 +323,13 @@ resource "aws_ecs_task_definition" "shipping_service" {
         {
           name      = "DATABASE_URL"
           valueFrom = aws_secretsmanager_secret.database_url.arn
+        }
+      ]
+
+      environment = [
+        {
+          name  = "SQS_QUEUE_URL"
+          value = aws_sqs_queue.ecs_v3_queue.id
         }
       ]
 
@@ -403,6 +426,30 @@ resource "aws_ecs_task_definition" "worker" {
         {
           name  = "SQS_QUEUE_URL"
           value = aws_sqs_queue.ecs_v3_queue.id
+        },
+        {
+          name  = "ORDER_SERVICE_URL"
+          value = "http://order-service:8081"
+        },
+        {
+          name  = "INVENTORY_SERVICE_URL"
+          value = "http://inventory-service:8082"
+        },
+        {
+          name  = "PAYMENT_SERVICE_URL"
+          value = "http://payment-service:8083"
+        },
+        {
+          name  = "NOTIFICATION_SERVICE_URL"
+          value = "http://notification-service:8084"
+        },
+        {
+          name  = "SHIPPING_SERVICE_URL"
+          value = "http://shipping-service:8085"
+        },
+        {
+          name  = "AUTO_DELIVER"
+          value = "true"
         }
       ]
 
@@ -785,6 +832,11 @@ resource "aws_ecs_service" "worker" {
     capacity_provider = "FARGATE"
     base              = 1
     weight            = 100
+  }
+
+  service_connect_configuration {
+    enabled   = true
+    namespace = aws_service_discovery_http_namespace.ecs_services.arn
   }
 
   deployment_circuit_breaker {
