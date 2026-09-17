@@ -1,0 +1,22 @@
+name: Deploy Notification Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/notification-service/**"
+      - ".github/workflows/deploy-notification-service.yml"
+      - ".github/workflows/deploy-service.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-service.yml
+    with:
+      service_name: notification-service
+      task_definition: notification_service
+      container_name: notification-service

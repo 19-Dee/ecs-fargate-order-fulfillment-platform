@@ -1,0 +1,22 @@
+name: Deploy Shipping Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/shipping-service/**"
+      - ".github/workflows/deploy-shipping-service.yml"
+      - ".github/workflows/deploy-service.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-service.yml
+    with:
+      service_name: shipping-service
+      task_definition: shipping_service
+      container_name: shipping-service

@@ -260,7 +260,17 @@ resource "aws_iam_role_policy" "github_actions_deploy_policy" {
           "ecr:UploadLayerPart"
         ]
 
-        Resource = aws_ecr_repository.worker.arn
+        Resource = [
+          aws_ecr_repository.api-gateway.arn,
+          aws_ecr_repository.dashboard-api.arn,
+          aws_ecr_repository.inventory-service.arn,
+          aws_ecr_repository.notification-service.arn,
+          aws_ecr_repository.order-service.arn,
+          aws_ecr_repository.payment-service.arn,
+          aws_ecr_repository.scheduler.arn,
+          aws_ecr_repository.shipping-service.arn,
+          aws_ecr_repository.worker.arn
+        ]
       },
       {
         Effect = "Allow"
@@ -283,6 +293,9 @@ resource "aws_iam_role_policy" "github_actions_deploy_policy" {
 
         Resource = [
           aws_iam_role.ecs_task_execution_role.arn,
+          aws_iam_role.order_service_task_role.arn,
+          aws_iam_role.payment_service_task_role.arn,
+          aws_iam_role.shipping_service_task_role.arn,
           aws_iam_role.worker_task_role.arn
         ]
 

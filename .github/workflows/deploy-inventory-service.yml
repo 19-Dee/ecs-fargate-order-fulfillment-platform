@@ -1,0 +1,22 @@
+name: Deploy Inventory Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/inventory-service/**"
+      - ".github/workflows/deploy-inventory-service.yml"
+      - ".github/workflows/deploy-service.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-service.yml
+    with:
+      service_name: inventory-service
+      task_definition: inventory_service
+      container_name: inventory-service

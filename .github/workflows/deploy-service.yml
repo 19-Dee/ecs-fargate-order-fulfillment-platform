@@ -1,0 +1,93 @@
+name: Reusable ECS Service Deployment
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: ECS service and ECR repository name
+        required: true
+        type: string
+      task_definition:
+        description: ECS task definition family
+        required: true
+        type: string
+      container_name:
+        description: Container name in the task definition
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-west-2
+  ECS_CLUSTER: dishen-ecs-cluster
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.service_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::142969859154:role/github-actions-deploy-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.service_name }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t "$IMAGE" "services/$ECR_REPOSITORY"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Scan image for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ steps.build-image.outputs.image }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      - name: Push image
+        run: docker push "${{ steps.build-image.outputs.image }}"
+
+      - name: Download task definition
+        env:
+          ECS_TASK_DEFINITION: ${{ inputs.task_definition }}
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_TASK_DEFINITION" \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Render task definition
+        id: render-task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ inputs.container_name }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
+          service: ${{ inputs.service_name }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true

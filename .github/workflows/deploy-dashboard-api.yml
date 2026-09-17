@@ -1,11 +1,11 @@
-name: Deploy Worker
+name: Deploy Dashboard API
 
 on:
   push:
     branches: [main]
     paths:
-      - "services/worker/**"
-      - ".github/workflows/deploy-worker.yml"
+      - "services/dashboard-api/**"
+      - ".github/workflows/deploy-dashboard-api.yml"
       - ".github/workflows/deploy-service.yml"
   workflow_dispatch:
 
@@ -17,6 +17,6 @@ jobs:
   deploy:
     uses: ./.github/workflows/deploy-service.yml
     with:
-      service_name: worker
-      task_definition: worker
-      container_name: worker
+      service_name: dashboard-api
+      task_definition: dashboard_api
+      container_name: dashboard-api
