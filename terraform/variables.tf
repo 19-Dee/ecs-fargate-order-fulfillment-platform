@@ -15,3 +15,9 @@ variable "ecs_desired_count" {
   type        = number
   default     = 1
 }
+
+variable "cloudwatch_alarm_actions" {
+  description = "SNS topic ARNs notified when CloudWatch alarms enter or leave ALARM state"
+  type        = list(string)
+  default     = []
+}

@@ -24,6 +24,7 @@ services/worker/worker
 *.tfstate.backup
 *.tfvars
 .terraform.lock.hcl
+!terraform/.terraform.lock.hcl
 
 # IDE
 .vscode/

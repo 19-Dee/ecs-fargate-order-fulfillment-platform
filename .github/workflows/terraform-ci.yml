@@ -1,0 +1,99 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-west-2
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+  TERRAFORM_VERSION: 1.13.3
+
+jobs:
+  validate:
+    name: Format and validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize without remote state
+        run: terraform init -backend=false -input=false
+
+      - name: Validate configuration
+        run: terraform validate
+
+  plan:
+    name: Plan trusted changes
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Require plan configuration
+        env:
+          TERRAFORM_PLAN_ROLE_ARN: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          TF_DB_PASSWORD: ${{ secrets.TF_DB_PASSWORD }}
+        run: |
+          if [ -z "$TERRAFORM_PLAN_ROLE_ARN" ]; then
+            echo "::error::Configure the AWS_TERRAFORM_PLAN_ROLE_ARN repository variable."
+            exit 1
+          fi
+          if [ -z "$TF_DB_PASSWORD" ]; then
+            echo "::error::Configure the TF_DB_PASSWORD repository secret."
+            exit 1
+          fi
+
+      - name: Configure read-only AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Initialize remote state
+        run: terraform init -input=false
+
+      - name: Plan
+        env:
+          TF_VAR_db_password: ${{ secrets.TF_DB_PASSWORD }}
+        run: terraform plan -input=false -no-color
+
+      # Apply is deliberately omitted. Infrastructure changes remain manual and controlled.
