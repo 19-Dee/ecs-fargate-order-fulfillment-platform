@@ -519,6 +519,10 @@ resource "aws_ecs_service" "api_gateway" {
   task_definition = aws_ecs_task_definition.api_gateway.arn
   desired_count   = var.ecs_desired_count
 
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
   load_balancer {
     target_group_arn = aws_lb_target_group.ecs_project_alb.arn
     container_name   = "api-gateway"
@@ -558,6 +562,10 @@ resource "aws_ecs_service" "order_service" {
   cluster         = aws_ecs_cluster.ecs_project_cluster.id
   task_definition = aws_ecs_task_definition.order_service.arn
   desired_count   = var.ecs_desired_count
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
@@ -601,6 +609,10 @@ resource "aws_ecs_service" "inventory_service" {
   cluster         = aws_ecs_cluster.ecs_project_cluster.id
   task_definition = aws_ecs_task_definition.inventory_service.arn
   desired_count   = var.ecs_desired_count
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
@@ -646,6 +658,10 @@ resource "aws_ecs_service" "payment_service" {
   task_definition = aws_ecs_task_definition.payment_service.arn
   desired_count   = var.ecs_desired_count
 
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
     base              = 1
@@ -689,6 +705,10 @@ resource "aws_ecs_service" "notification_service" {
   cluster         = aws_ecs_cluster.ecs_project_cluster.id
   task_definition = aws_ecs_task_definition.notification_service.arn
   desired_count   = var.ecs_desired_count
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
@@ -734,6 +754,10 @@ resource "aws_ecs_service" "shipping_service" {
   task_definition = aws_ecs_task_definition.shipping_service.arn
   desired_count   = var.ecs_desired_count
 
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
     base              = 1
@@ -777,6 +801,10 @@ resource "aws_ecs_service" "dashboard_api" {
   cluster         = aws_ecs_cluster.ecs_project_cluster.id
   task_definition = aws_ecs_task_definition.dashboard_api.arn
   desired_count   = var.ecs_desired_count
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
@@ -828,6 +856,10 @@ resource "aws_ecs_service" "worker" {
   task_definition = aws_ecs_task_definition.worker.arn
   desired_count   = var.ecs_desired_count
 
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
   capacity_provider_strategy {
     capacity_provider = "FARGATE"
     base              = 1
@@ -860,6 +892,10 @@ resource "aws_ecs_service" "scheduler" {
   cluster         = aws_ecs_cluster.ecs_project_cluster.id
   task_definition = aws_ecs_task_definition.scheduler.arn
   desired_count   = var.ecs_desired_count
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 
   capacity_provider_strategy {
     capacity_provider = "FARGATE"

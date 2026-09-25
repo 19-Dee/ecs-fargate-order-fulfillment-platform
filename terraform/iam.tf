@@ -308,3 +308,145 @@ resource "aws_iam_role_policy" "github_actions_deploy_policy" {
     ]
   })
 }
+
+resource "aws_iam_role" "github_actions_terraform_plan_role" {
+  name = "github-actions-terraform-plan-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github_actions.arn
+        }
+
+        Action = "sts:AssumeRoleWithWebIdentity"
+
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = "repo:19-Dee@146390483/ecs-fargate-order-fulfillment-platform@1385342034:ref:refs/heads/main"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "github_actions_terraform_plan_policy" {
+  name = "github-actions-terraform-plan-policy"
+  role = aws_iam_role.github_actions_terraform_plan_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetBucketLocation"
+        ]
+
+        Resource = "arn:aws:s3:::dishen-ecs-project-terraform-state"
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "s3:ListBucket"
+        ]
+
+        Resource = "arn:aws:s3:::dishen-ecs-project-terraform-state"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "ecs-project/terraform.tfstate",
+              "ecs-project/terraform.tfstate.tflock"
+            ]
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject"
+        ]
+
+        Resource = "arn:aws:s3:::dishen-ecs-project-terraform-state/ecs-project/terraform.tfstate"
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+
+        Resource = "arn:aws:s3:::dishen-ecs-project-terraform-state/ecs-project/terraform.tfstate.tflock"
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "cloudwatch:DescribeAlarms",
+          "cloudwatch:GetDashboard",
+          "cloudwatch:ListDashboards",
+          "cloudwatch:ListTagsForResource",
+          "ec2:Describe*",
+          "ecr:DescribeRepositories",
+          "ecr:ListTagsForResource",
+          "ecs:Describe*",
+          "ecs:List*",
+          "elasticache:Describe*",
+          "elasticache:ListTagsForResource",
+          "elasticloadbalancing:Describe*",
+          "iam:GetOpenIDConnectProvider",
+          "iam:GetPolicy",
+          "iam:GetPolicyVersion",
+          "iam:GetRole",
+          "iam:GetRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:ListOpenIDConnectProviders",
+          "iam:ListOpenIDConnectProviderTags",
+          "iam:ListPolicyTags",
+          "iam:ListRoleTags",
+          "iam:ListRolePolicies",
+          "logs:DescribeLogGroups",
+          "logs:ListTagsForResource",
+          "rds:Describe*",
+          "rds:ListTagsForResource",
+          "servicediscovery:GetNamespace",
+          "servicediscovery:ListTagsForResource",
+          "sqs:GetQueueAttributes",
+          "sqs:GetQueueUrl",
+          "sqs:ListQueueTags",
+          "sts:GetCallerIdentity"
+        ]
+
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetResourcePolicy",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:ListSecretVersionIds"
+        ]
+
+        Resource = aws_secretsmanager_secret.database_url.arn
+      }
+    ]
+  })
+}
